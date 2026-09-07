@@ -84,6 +84,7 @@ protected:
 	/* misc */
 	uint16_t        m_eep_latch;
 	uint16_t        m_coin_word;
+	uint8_t         m_audiobank_mask;
 
 	/* devices */
 	required_device<cpu_device> m_maincpu;

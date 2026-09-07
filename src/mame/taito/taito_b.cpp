@@ -249,7 +249,7 @@ B72-10.IC32 - MMI PAL16L8
 
 void taitob_state::bankswitch_w(uint8_t data)
 {
-	m_audiobank->set_entry(data & 3);
+	m_audiobank->set_entry(data & m_audiobank_mask);
 }
 
 template<int Player>
@@ -1843,10 +1843,21 @@ void taitob_state::mb87078_gain_changed(offs_t offset, uint8_t data)
 
 void taitob_state::machine_start()
 {
-	m_audiobank->configure_entries(0, 4, memregion("audiocpu")->base(), 0x4000);
+	// The Z80 sound CPU maps a 16KB banked window at 0x4000-0x7fff. The number
+	// of 16KB banks depends on the sound ROM size: 128KB ROMs (qzshowby,
+	// pbobble, bublbust) need 8 banks, while 64KB ROMs only need 4.
+	int num_banks = memregion("audiocpu")->bytes() / 0x4000;
+	// round down to the nearest power of two so the mask is contiguous
+	while (num_banks & (num_banks - 1))
+		num_banks &= num_banks - 1;
+	if (num_banks < 1)
+		num_banks = 1;
+	m_audiobank_mask = num_banks - 1;
+	m_audiobank->configure_entries(0, num_banks, memregion("audiocpu")->base(), 0x4000);
 
 	save_item(NAME(m_eep_latch));
 	save_item(NAME(m_coin_word));
+	save_item(NAME(m_audiobank_mask));
 }
 
 void taitob_state::machine_reset()
@@ -3284,7 +3295,8 @@ ROM_START( qzshowby )
 	ROM_LOAD16_BYTE( "d72-12.bin", 0x00001, 0x80000, CRC(522c09a7) SHA1(2ceeb7ac24bb621630cc996381e57501f9ea672e) )
 
 	ROM_REGION( 0x20000, "audiocpu", 0 )     /* 128k for Z80 code */
-	ROM_LOAD( "d72-11.bin", 0x00000, 0x20000, CRC(2ca046e2) SHA1(983620e657d729e1441d509f18141bb3bb581855) )
+	ROM_LOAD( "d72-11.bin", 0x00000, 0x20000, CRC(2ca046e2) SHA1(983620e657d729e1441d509f18141bb3bb581855) ) 
+
 
 	ROM_REGION( 0x400000, "tc0180vcu", 0 )
 	ROM_LOAD( "d72-03.bin", 0x000000, 0x200000, CRC(1de257d0) SHA1(df03b1fb5cd69e2d2eb2088f96f26b0ea9756fb7) )
