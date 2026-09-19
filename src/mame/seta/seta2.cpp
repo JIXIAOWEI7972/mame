@@ -2101,6 +2101,7 @@ void seta2_state::myangel(machine_config &config)
 
 	// video hardware
 	m_screen->set_visarea(0, 0x178-1, 0x00, 0xf0-1);
+	m_video->set_y_disp_9bit(true);
 }
 
 
@@ -2111,6 +2112,7 @@ void seta2_state::myangel2(machine_config &config)
 
 	// video hardware
 	m_screen->set_visarea(0, 0x178-1, 0x00, 0xf0-1);
+	m_video->set_y_disp_9bit(true);
 }
 
 
