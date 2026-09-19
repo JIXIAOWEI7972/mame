@@ -18,6 +18,9 @@ public:
 	auto flip_screen_x_callback() { return m_flip_screen_x_cb.bind(); }
 	auto flip_screen_y_callback() { return m_flip_screen_y_cb.bind(); }
 
+	// base sprite list Y displacement is 10-bit signed by default; myangel/myangel2 use 9-bit signed
+	void set_y_disp_9bit(bool nine_bit) { m_y_disp_9bit = nine_bit; }
+
 	void vregs_w(offs_t offset, uint16_t data, uint16_t mem_mask = ~0);
 	uint16_t vregs_r(offs_t offset);
 	uint16_t spriteram_r(offs_t offset);
@@ -48,6 +51,8 @@ private:
 	devcb_write_line m_flip_screen_cb;
 	devcb_write_line m_flip_screen_x_cb;
 	devcb_write_line m_flip_screen_y_cb;
+
+	bool m_y_disp_9bit = false;
 
 	// memory pointers
 	memory_share_creator<uint16_t> m_spriteram;

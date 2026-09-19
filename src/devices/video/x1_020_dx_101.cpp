@@ -137,7 +137,6 @@
 #define LOGSPRITE(...) LOGMASKED(LOG_SPRITE, __VA_ARGS__)
 #define LOGOFFSET(...) LOGMASKED(LOG_OFFSET, __VA_ARGS__)
 
-
 static const gfx_layout tile_layout =
 {
 	8,8,
@@ -317,6 +316,7 @@ void x1_020_dx_101_device::vregs_w(offs_t offset, uint16_t data, uint16_t mem_ma
 			   this at least gets the sprite data in the right place for the grdians raster effect to write the
 			   changed scroll values to the correct sprites, but is still nothing more than a guess
 			*/
+
 			int current_sprite_entry = 0;
 
 			for (int i = 0; i < 0x1000 / 2; i += 4)
@@ -617,10 +617,7 @@ void x1_020_dx_101_device::draw_sprites_line(bitmap_ind16 &bitmap, const rectang
 {
 	const uint16_t *s1 = m_private_spriteram.get();
 
-	int sprite_debug_count = 0;
-	(void)sprite_debug_count;
-
-	for (; s1 < &m_private_spriteram[0x1000 / 2]; s1 += 4, sprite_debug_count++)
+	for (; s1 < &m_private_spriteram[0x1000 / 2]; s1 += 4)
 	{
 		int num = s1[0];
 
@@ -642,10 +639,19 @@ void x1_020_dx_101_device::draw_sprites_line(bitmap_ind16 &bitmap, const rectang
 		bool use_shadow = BIT(num, 11);
 		const int which_gfx = (num & 0x0700) >> 8;
 		xoffs &= 0x3ff;
-		yoffs &= 0x3ff;
 
-		if (yoffs & 0x200)
-			yoffs -= 0x400;
+		if (m_y_disp_9bit)
+		{
+			yoffs &= 0x1ff;
+			if (yoffs & 0x100)
+				yoffs -= 0x200;
+		}
+		else
+		{
+			yoffs &= 0x3ff;
+			if (yoffs & 0x200)
+				yoffs -= 0x400;
+		}
 
 		const int global_xoffset = calculate_global_xoffset(nozoom_fixedpalette_fixedposition);
 		const int global_yoffset = calculate_global_yoffset(nozoom_fixedpalette_fixedposition);
@@ -766,8 +772,8 @@ void x1_020_dx_101_device::draw_sprites_line(bitmap_ind16 &bitmap, const rectang
 						dst_x = (dst_x & 0x1ff) - (dst_x & 0x200);
 
 						if ((dst_x >= firstcolumn - 8) && (dst_x <= lastcolumn)) // reelnquak reels are heavily glitched without this check
-						{
-							uint32_t realsx = dst_x;
+							{
+								uint32_t realsx = dst_x;
 							realsx -= usedxoffset >> 16; // need to refactor, this causes loss of lower 16 bits of offset which are important in zoomed cases for precision
 							realsx = realsx * usedxzoom;
 							drawgfx_line(
@@ -793,11 +799,6 @@ void x1_020_dx_101_device::draw_sprites_line(bitmap_ind16 &bitmap, const rectang
 
 					sy += global_yoffset;
 					sy &= 0x3ff;
-
-					if (realscanline == 128)
-					{
-						//LOGSPRITE("%04x %02x %d %d\n", sprite_debug_count, num, yoffs, sy);
-					}
 
 					int sizey = use_global_size ? global_sizey : s2[1] & 0xfc00;
 
@@ -860,8 +861,8 @@ void x1_020_dx_101_device::draw_sprites_line(bitmap_ind16 &bitmap, const rectang
 					const int code_inc = flipx ? -1 : 1;
 
 					for (int x = 0; x <= sizex; x++)
-					{
-						uint32_t realsx = (sx + x * 8);
+						{
+							uint32_t realsx = (sx + x * 8);
 						realsx -= usedxoffset >> 16; // need to refactor, this causes loss of lower 16 bits of offset which are important in zoomed cases for precision
 						realsx = realsx * usedxzoom;
 						drawgfx_line(
@@ -879,7 +880,7 @@ void x1_020_dx_101_device::draw_sprites_line(bitmap_ind16 &bitmap, const rectang
 				}
 			}
 		}
-		if (BIT(s1[0], 15)) break;  // end of list marker
+		if (BIT(s1[0], 15)) break; // end of list marker
 	}   // sprite list
 }
 
