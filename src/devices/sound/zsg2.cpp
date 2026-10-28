@@ -474,9 +474,10 @@ uint16_t zsg2_device::chan_r(int ch, int reg)
 		case 0x9:
 			// pretty certain, though no games actually read from this.
 			return m_chan[ch].output_cutoff;
-		case 0xb:
-			// lower 13 bits contain the output volume (used by G-NET driver to allocate voices)
-			return m_chan[ch].vol >> 3;
+		case 0xb: // Only later games (taitogn) read this register...
+			// GNet games use some of the flags to decide which channels to kill when
+			// all the channels are busy. (take raycris song #23 as an example)
+			return m_chan[ch].vol;
 		default:
 			break;
 	}
@@ -609,14 +610,16 @@ uint16_t zsg2_device::control_r(int reg)
 
 void zsg2_device::write(offs_t offset, uint16_t data, uint16_t mem_mask)
 {
-	// we only support full 16-bit accesses
+	m_stream->update();
+
+	// Read-modify-write for partial byte accesses (MN10200 does 8-bit accesses)
 	if (mem_mask != 0xffff)
 	{
-		popmessage("ZSG2 write mask %04X, contact MAMEdev", mem_mask);
-		return;
+		uint16_t const old = (offset < 0x300)
+			? chan_r(offset >> 4, offset & 0xf)
+			: control_r(offset - 0x300);
+		data = (old & ~mem_mask) | (data & mem_mask);
 	}
-
-	m_stream->update();
 
 	if (offset < 0x300)
 	{
@@ -633,24 +636,13 @@ void zsg2_device::write(offs_t offset, uint16_t data, uint16_t mem_mask)
 
 uint16_t zsg2_device::read(offs_t offset, uint16_t mem_mask)
 {
-	// we only support full 16-bit accesses
-	if (mem_mask != 0xffff)
-	{
-		popmessage("ZSG2 read mask %04X, contact MAMEdev", mem_mask);
-		return 0;
-	}
-
 	m_stream->update();
 
-	if (offset < 0x300)
-	{
-		int chan = offset >> 4;
-		int reg = offset & 0xf;
+	uint16_t const full = (offset < 0x300)
+		? chan_r(offset >> 4, offset & 0xf)
+		: control_r(offset - 0x300);
 
-		return chan_r(chan, reg);
-	}
-	else
-	{
-		return control_r(offset - 0x300);
-	}
+	// For partial byte accesses, MAME's address_space extracts the requested byte
+	// from the returned 16-bit value automatically based on mem_mask/offset
+	return full;
 }
