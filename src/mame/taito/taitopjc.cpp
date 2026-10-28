@@ -1316,24 +1316,24 @@ void taitopjc_state::machine_start()
 	};
 
 	m_soundcpu->space(AS_PROGRAM).install_write_tap(0x00fff0, 0x00fff1, "pjc_tmr0",
-		[this, snd_timer_w](offs_t offset, uint16_t &data, uint16_t mask)
+		[snd_timer_w](offs_t offset, uint16_t &data, uint16_t mask)
 		{
 			if (mask & 0x00ff) snd_timer_w(0xfff0, 0xf0, uint8_t(data & 0xff));
 			if (mask & 0xff00) snd_timer_w(0xfff0, 0xf1, uint8_t(data >> 8));
 		});
 	m_soundcpu->space(AS_PROGRAM).install_write_tap(0x00fff2, 0x00fff3, "pjc_tmr1",
-		[this, snd_timer_w](offs_t offset, uint16_t &data, uint16_t mask)
+		[snd_timer_w](offs_t offset, uint16_t &data, uint16_t mask)
 		{
 			if (mask & 0x00ff) snd_timer_w(0xfff2, 0xf2, uint8_t(data & 0xff));
 		});
 	m_soundcpu->space(AS_PROGRAM).install_write_tap(0x00fff4, 0x00fff5, "pjc_tmr2",
-		[this, snd_timer_w](offs_t offset, uint16_t &data, uint16_t mask)
+		[snd_timer_w](offs_t offset, uint16_t &data, uint16_t mask)
 		{
 			if (mask & 0x00ff) snd_timer_w(0xfff4, 0xf4, uint8_t(data & 0xff));
 			if (mask & 0xff00) snd_timer_w(0xfff4, 0xf5, uint8_t(data >> 8));
 		});
 	m_soundcpu->space(AS_PROGRAM).install_write_tap(0x00fff6, 0x00fff7, "pjc_tmr3",
-		[this, snd_timer_w](offs_t offset, uint16_t &data, uint16_t mask)
+		[snd_timer_w](offs_t offset, uint16_t &data, uint16_t mask)
 		{
 			if (mask & 0x00ff) snd_timer_w(0xfff6, 0xf6, uint8_t(data & 0xff));
 		});
