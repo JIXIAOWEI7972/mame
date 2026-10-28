@@ -301,6 +301,7 @@ G)ame Connector, dual row 50 pins
 
 #include "emupal.h"
 #include "screen.h"
+#include "speaker.h"
 #include "tilemap.h"
 
 #include "endianness.h"
@@ -1127,7 +1128,7 @@ ROM_START( optiger ) // Ver 2.14 O
 	ROM_LOAD16_WORD_SWAP( "e63-11.ic5", 0x800000, 0x400000, CRC(2293d9f8) SHA1(16adaa0523168ee63a7a34b29622c623558fdd82) ) // PCB silkscreened IC5 (POLY2)    23C32000
 	// IC6 (POLY3) is not populated
 
-	ROM_REGION( 0x800000, "sound_data", 0 ) // mask ROMs - Zoom ZSG-2 samples
+	ROM_REGION32_LE( 0x800000, "zsg2", 0 ) // mask ROMs - Zoom ZSG-2 samples (32-bit region, name must match the ZSG2 device tag)
 	ROM_LOAD( "e63-23.ic36", 0x000000, 0x200000, CRC(d69e196e) SHA1(f738bb9e1330f6dabb5e0f0378a1a8eb48a4fa40) ) // PCB silkscreened IC36 (WD0)    23C16000
 	ROM_LOAD( "e63-24.ic37", 0x200000, 0x200000, CRC(cd55f17b) SHA1(08f847ef2fd592dbaf63ef9e370cdf1f42012f74) ) // PCB silkscreened IC37 (WD1)    23C16000
 	ROM_LOAD( "e63-25.ic38", 0x400000, 0x200000, CRC(bd35bdac) SHA1(5cde6c1a6b74659507b31fcb88257e65f230bfe2) ) // PCB silkscreened IC38 (WD2)    23C16000
@@ -1176,7 +1177,7 @@ ROM_START( optigera ) // Ver 2.10 O
 	ROM_LOAD16_WORD_SWAP( "e63-11.ic5", 0x800000, 0x400000, CRC(2293d9f8) SHA1(16adaa0523168ee63a7a34b29622c623558fdd82) ) // PCB silkscreened IC5 (POLY2)    23C32000
 	// IC6 (POLY3) is not populated
 
-	ROM_REGION( 0x800000, "sound_data", 0 ) // mask ROMs - Zoom ZSG-2 samples
+	ROM_REGION32_LE( 0x800000, "zsg2", 0 ) // mask ROMs - Zoom ZSG-2 samples (32-bit region, name must match the ZSG2 device tag)
 	ROM_LOAD( "e63-23.ic36", 0x000000, 0x200000, CRC(d69e196e) SHA1(f738bb9e1330f6dabb5e0f0378a1a8eb48a4fa40) ) // PCB silkscreened IC36 (WD0)    23C16000
 	ROM_LOAD( "e63-24.ic37", 0x200000, 0x200000, CRC(cd55f17b) SHA1(08f847ef2fd592dbaf63ef9e370cdf1f42012f74) ) // PCB silkscreened IC37 (WD1)    23C16000
 	ROM_LOAD( "e63-25.ic38", 0x400000, 0x200000, CRC(bd35bdac) SHA1(5cde6c1a6b74659507b31fcb88257e65f230bfe2) ) // PCB silkscreened IC38 (WD2)    23C16000
@@ -1225,7 +1226,7 @@ ROM_START( optigerj ) // ver 2.09 J
 	ROM_LOAD16_WORD_SWAP( "e63-11.ic5", 0x800000, 0x400000, CRC(2293d9f8) SHA1(16adaa0523168ee63a7a34b29622c623558fdd82) ) // PCB silkscreened IC5 (POLY2)    23C32000
 	// IC6 (POLY3) is not populated
 
-	ROM_REGION( 0x800000, "sound_data", 0 ) // mask ROMs - Zoom ZSG-2 samples
+	ROM_REGION32_LE( 0x800000, "zsg2", 0 ) // mask ROMs - Zoom ZSG-2 samples (32-bit region, name must match the ZSG2 device tag)
 	ROM_LOAD( "e63-23.ic36", 0x000000, 0x200000, CRC(d69e196e) SHA1(f738bb9e1330f6dabb5e0f0378a1a8eb48a4fa40) ) // PCB silkscreened IC36 (WD0)    23C16000
 	ROM_LOAD( "e63-24.ic37", 0x200000, 0x200000, CRC(cd55f17b) SHA1(08f847ef2fd592dbaf63ef9e370cdf1f42012f74) ) // PCB silkscreened IC37 (WD1)    23C16000
 	ROM_LOAD( "e63-25.ic38", 0x400000, 0x200000, CRC(bd35bdac) SHA1(5cde6c1a6b74659507b31fcb88257e65f230bfe2) ) // PCB silkscreened IC38 (WD2)    23C16000
@@ -1274,7 +1275,7 @@ ROM_START( optigersm ) // Second Mission ver 2.02 J (build date shows 1999 but s
 	ROM_LOAD16_WORD_SWAP( "e63-11.ic5", 0x800000, 0x400000, CRC(2293d9f8) SHA1(16adaa0523168ee63a7a34b29622c623558fdd82) ) // PCB silkscreened IC5 (POLY2)    23C32000
 	// IC6 (POLY3) is not populated
 
-	ROM_REGION( 0x800000, "sound_data", 0 ) // mask ROMs - Zoom ZSG-2 samples
+	ROM_REGION32_LE( 0x800000, "zsg2", 0 ) // mask ROMs - Zoom ZSG-2 samples (32-bit region, name must match the ZSG2 device tag)
 	ROM_LOAD( "e63-23.ic36", 0x000000, 0x200000, CRC(d69e196e) SHA1(f738bb9e1330f6dabb5e0f0378a1a8eb48a4fa40) ) // PCB silkscreened IC36 (WD0)    23C16000
 	ROM_LOAD( "e63-24.ic37", 0x200000, 0x200000, CRC(cd55f17b) SHA1(08f847ef2fd592dbaf63ef9e370cdf1f42012f74) ) // PCB silkscreened IC37 (WD1)    23C16000
 	ROM_LOAD( "e63-25.ic38", 0x400000, 0x200000, CRC(bd35bdac) SHA1(5cde6c1a6b74659507b31fcb88257e65f230bfe2) ) // PCB silkscreened IC38 (WD2)    23C16000
