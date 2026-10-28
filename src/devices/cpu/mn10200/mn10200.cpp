@@ -538,13 +538,35 @@ void mn10200_device::do_jsr(uint32_t to, uint32_t ret)
 	change_pc(to);
 }
 
-void mn10200_device::do_branch(int condition)
+bool mn10200_device::do_branch(int condition)
 {
 	if (condition)
 	{
 		m_cycles -= 1;
 		change_pc(m_pc + (int8_t)read_arg8(m_pc));
 	}
+	return false;
+}
+
+
+//-------------------------------------------------
+//  branch for the f5 extended opcode group
+//-------------------------------------------------
+
+// The f5 group reaches this helper with m_pc already advanced past the second
+// opcode byte (the caller does `op = read_arg8(m_pc); m_pc += 1;`), i.e. m_pc
+// points exactly at the displacement byte.  That is the same position do_branch()
+// expects, and its m_pc + 1 + disp then yields op_pc + 3 + disp - the correct
+// target for a 3-byte instruction.  An earlier version wound m_pc back one byte
+// here, which made do_branch() read the sub-opcode as the displacement: for
+// "f5 fe 06 / bnc +6" at 0x860d3 it computed 0x860d3 and branched to itself.  The
+// sound program wedged in that single instruction (175M executions, PC ring buffer
+// full of 0x860d3) and never reached its mailbox loop.
+bool mn10200_device::do_branch_f5(int condition)
+{
+	if (condition)
+		return do_branch(1);
+	return false;
 }
 
 
@@ -721,68 +743,68 @@ void mn10200_device::execute_run()
 
 		// blt label8
 		case 0xe0:
-			do_branch(((m_psw & (FLAG_NF|FLAG_VF)) == FLAG_NF) || ((m_psw & (FLAG_NF|FLAG_VF)) == FLAG_VF)); // (VF^NF)=1
-			m_pc += 1;
+			if (!do_branch(((m_psw & (FLAG_NF|FLAG_VF)) == FLAG_NF) || ((m_psw & (FLAG_NF|FLAG_VF)) == FLAG_VF))) // (VF^NF)=1
+				m_pc += 1;
 			break;
 
 		// bgt label8
 		case 0xe1:
-			do_branch(((m_psw & (FLAG_ZF|FLAG_NF|FLAG_VF)) == 0) || ((m_psw & (FLAG_ZF|FLAG_NF|FLAG_VF)) == (FLAG_NF|FLAG_VF))); // ((VF^NF)|ZF)=0
-			m_pc += 1;
+			if (!do_branch(((m_psw & (FLAG_ZF|FLAG_NF|FLAG_VF)) == 0) || ((m_psw & (FLAG_ZF|FLAG_NF|FLAG_VF)) == (FLAG_NF|FLAG_VF)))) // ((VF^NF)|ZF)=0
+				m_pc += 1;
 			break;
 
 		// bge label8
 		case 0xe2:
-			do_branch(((m_psw & (FLAG_NF|FLAG_VF)) == 0) || ((m_psw & (FLAG_NF|FLAG_VF)) == (FLAG_NF|FLAG_VF))); // (VF^NF)=0
-			m_pc += 1;
+			if (!do_branch(((m_psw & (FLAG_NF|FLAG_VF)) == 0) || ((m_psw & (FLAG_NF|FLAG_VF)) == (FLAG_NF|FLAG_VF)))) // (VF^NF)=0
+				m_pc += 1;
 			break;
 
 		// ble label8
 		case 0xe3:
-			do_branch((m_psw & FLAG_ZF) || ((m_psw & (FLAG_NF|FLAG_VF)) == FLAG_NF) || ((m_psw & (FLAG_NF|FLAG_VF)) == FLAG_VF)); // ((VF^NF)|ZF)=1
-			m_pc += 1;
+			if (!do_branch((m_psw & FLAG_ZF) || ((m_psw & (FLAG_NF|FLAG_VF)) == FLAG_NF) || ((m_psw & (FLAG_NF|FLAG_VF)) == FLAG_VF))) // ((VF^NF)|ZF)=1
+				m_pc += 1;
 			break;
 
 		// bcs label8
 		case 0xe4:
-			do_branch(m_psw & FLAG_CF); // CF=1
-			m_pc += 1;
+			if (!do_branch(m_psw & FLAG_CF)) // CF=1
+				m_pc += 1;
 			break;
 
 		// bhi label8
 		case 0xe5:
-			do_branch(!(m_psw & (FLAG_ZF|FLAG_CF))); // (CF|ZF)=0
-			m_pc += 1;
+			if (!do_branch(!(m_psw & (FLAG_ZF|FLAG_CF)))) // (CF|ZF)=0
+				m_pc += 1;
 			break;
 
 		// bcc label8
 		case 0xe6:
-			do_branch(!(m_psw & FLAG_CF)); // CF=0
-			m_pc += 1;
+			if (!do_branch(!(m_psw & FLAG_CF))) // CF=0
+				m_pc += 1;
 			break;
 
 		// bls label8
 		case 0xe7:
-			do_branch(m_psw & (FLAG_ZF|FLAG_CF)); // (CF|ZF)=1
-			m_pc += 1;
+			if (!do_branch(m_psw & (FLAG_ZF|FLAG_CF))) // (CF|ZF)=1
+				m_pc += 1;
 			break;
 
 		// beq label8
 		case 0xe8:
-			do_branch(m_psw & FLAG_ZF); // ZF=1
-			m_pc += 1;
+			if (!do_branch(m_psw & FLAG_ZF)) // ZF=1
+				m_pc += 1;
 			break;
 
 		// bne label8
 		case 0xe9:
-			do_branch(!(m_psw & FLAG_ZF)); // ZF=0
-			m_pc += 1;
+			if (!do_branch(!(m_psw & FLAG_ZF))) // ZF=0
+				m_pc += 1;
 			break;
 
 		// bra label8
 		case 0xea:
-			do_branch();
-			m_pc += 1;
+			if (!do_branch())
+				m_pc += 1;
 			break;
 
 		// rti
@@ -1459,92 +1481,92 @@ void mn10200_device::execute_run()
 
 		// bltx label8
 		case 0xe0:
-			do_branch(((m_psw & (FLAG_NX|FLAG_VX)) == FLAG_NX) || ((m_psw & (FLAG_NX|FLAG_VX)) == FLAG_VX)); // (VX^NX)=1
+			f5_jumped = do_branch_f5(((m_psw & (FLAG_NX|FLAG_VX)) == FLAG_NX) || ((m_psw & (FLAG_NX|FLAG_VX)) == FLAG_VX)); // (VX^NX)=1
 			break;
 
 		// bgtx label8
 		case 0xe1:
-			do_branch(((m_psw & (FLAG_ZX|FLAG_NX|FLAG_VX)) == 0) || ((m_psw & (FLAG_ZX|FLAG_NX|FLAG_VX)) == (FLAG_NX|FLAG_VX))); // ((VX^NX)|ZX)=0
+			f5_jumped = do_branch_f5(((m_psw & (FLAG_ZX|FLAG_NX|FLAG_VX)) == 0) || ((m_psw & (FLAG_ZX|FLAG_NX|FLAG_VX)) == (FLAG_NX|FLAG_VX))); // ((VX^NX)|ZX)=0
 			break;
 
 		// bgex label8
 		case 0xe2:
-			do_branch(((m_psw & (FLAG_NX|FLAG_VX)) == 0) || ((m_psw & (FLAG_NX|FLAG_VX)) == (FLAG_NX|FLAG_VX))); // (VX^NX)=0
+			f5_jumped = do_branch_f5(((m_psw & (FLAG_NX|FLAG_VX)) == 0) || ((m_psw & (FLAG_NX|FLAG_VX)) == (FLAG_NX|FLAG_VX))); // (VX^NX)=0
 			break;
 
 		// blex label8
 		case 0xe3:
-			do_branch((m_psw & FLAG_ZX) || ((m_psw & (FLAG_NX|FLAG_VX)) == FLAG_NX) || ((m_psw & (FLAG_NX|FLAG_VX)) == FLAG_VX)); // ((VX^NX)|ZX)=1
+			f5_jumped = do_branch_f5((m_psw & FLAG_ZX) || ((m_psw & (FLAG_NX|FLAG_VX)) == FLAG_NX) || ((m_psw & (FLAG_NX|FLAG_VX)) == FLAG_VX)); // ((VX^NX)|ZX)=1
 			break;
 
 		// bcsx label8
 		case 0xe4:
-			do_branch(m_psw & FLAG_CX); // CX=1
+			f5_jumped = do_branch_f5(m_psw & FLAG_CX); // CX=1
 			break;
 
 		// bhix label8
 		case 0xe5:
-			do_branch(!(m_psw & (FLAG_ZX|FLAG_CX))); // (CX|ZX)=0
+			f5_jumped = do_branch_f5(!(m_psw & (FLAG_ZX|FLAG_CX))); // (CX|ZX)=0
 			break;
 
 		// bccx label8
 		case 0xe6:
-			do_branch(!(m_psw & FLAG_CX)); // CX=0
+			f5_jumped = do_branch_f5(!(m_psw & FLAG_CX)); // CX=0
 			break;
 
 		// blsx label8
 		case 0xe7:
-			do_branch(m_psw & (FLAG_ZX|FLAG_CX)); // (CX|ZX)=1
+			f5_jumped = do_branch_f5(m_psw & (FLAG_ZX|FLAG_CX)); // (CX|ZX)=1
 			break;
 
 		// beqx label8
 		case 0xe8:
-			do_branch(m_psw & FLAG_ZX); // ZX=1
+			f5_jumped = do_branch_f5(m_psw & FLAG_ZX); // ZX=1
 			break;
 
 		// bnex label8
 		case 0xe9:
-			do_branch(!(m_psw & FLAG_ZX)); // ZX=0
+			f5_jumped = do_branch_f5(!(m_psw & FLAG_ZX)); // ZX=0
 			break;
 
 		// bvcx label8
 		case 0xec:
-			do_branch(!(m_psw & FLAG_VX)); // VX=0
+			f5_jumped = do_branch_f5(!(m_psw & FLAG_VX)); // VX=0
 			break;
 
 		// bvsx label8
 		case 0xed:
-			do_branch(m_psw & FLAG_VX); // VX=1
+			f5_jumped = do_branch_f5(m_psw & FLAG_VX); // VX=1
 			break;
 
 		// bncx label8
 		case 0xee:
-			do_branch(!(m_psw & FLAG_NX)); // NX=0
+			f5_jumped = do_branch_f5(!(m_psw & FLAG_NX)); // NX=0
 			break;
 
 		// bnsx label8
 		case 0xef:
-			do_branch(m_psw & FLAG_NX); // NX=1
+			f5_jumped = do_branch_f5(m_psw & FLAG_NX); // NX=1
 			break;
 
 		// bvc label8
 		case 0xfc:
-			do_branch(!(m_psw & FLAG_VF)); // VF=0
+			f5_jumped = do_branch_f5(!(m_psw & FLAG_VF)); // VF=0
 			break;
 
 		// bvs label8
 		case 0xfd:
-			do_branch(m_psw & FLAG_VF); // VF=1
+			f5_jumped = do_branch_f5(m_psw & FLAG_VF); // VF=1
 			break;
 
 		// bnc label8
 		case 0xfe:
-			do_branch(!(m_psw & FLAG_NF)); // NF=0
+			f5_jumped = do_branch_f5(!(m_psw & FLAG_NF)); // NF=0
 			break;
 
 		// bns label8
 		case 0xff:
-			do_branch(m_psw & FLAG_NF); // NF=1
+			f5_jumped = do_branch_f5(m_psw & FLAG_NF); // NF=1
 			break;
 
 		default:

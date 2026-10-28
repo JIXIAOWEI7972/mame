@@ -181,7 +181,8 @@ private:
 	uint32_t do_sub(uint32_t a, uint32_t b, uint32_t c = 0);
 	void test_nz16(uint16_t v);
 	void do_jsr(uint32_t to, uint32_t ret);
-	void do_branch(int condition = 1);
+	bool do_branch(int condition = 1);
+	bool do_branch_f5(int condition);
 };
 
 
