@@ -36,7 +36,10 @@ enum mn10200_flag
 };
 
 
+
+
 DEFINE_DEVICE_TYPE(MN1020012A, mn1020012a_device, "mn1020012a", "Panasonic MN1020012A")
+DEFINE_DEVICE_TYPE(MN1020819, mn1020819_device, "mn1020819", "Panasonic MN1020819DA")
 
 // internal memory maps
 void mn10200_device::mn1020012a_internal_map(address_map &map)
@@ -58,6 +61,14 @@ mn10200_device::mn10200_device(const machine_config &mconfig, device_type type, 
 mn1020012a_device::mn1020012a_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock)
 	: mn10200_device(mconfig, MN1020012A, tag, owner, clock, address_map_constructor(FUNC(mn1020012a_device::mn1020012a_internal_map), this))
 { }
+
+mn1020819_device::mn1020819_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock)
+	: mn10200_device(mconfig, MN1020819, tag, owner, clock, address_map_constructor(FUNC(mn10200_device::mn1020012a_internal_map), this))
+{
+	// Board quirks are opt-in (see set_power_jc_quirks): the part is otherwise a
+	// plain MN10200 with the 819's internal peripheral layout, so other boards that
+	// use it (Taito Type-Zero, for instance) get the unmodified behaviour.
+}
 
 
 device_memory_interface::space_config_vector mn10200_device::memory_space_config() const
@@ -291,11 +302,19 @@ void mn10200_device::device_reset()
 
 void mn10200_device::take_irq(int level, int group)
 {
+	// Interrupt entry cost.  When a timer produces requests far faster than the CPU
+	// can service them, the effective tick rate is set by this cost rather than by
+	// the timer period, so it is modelled explicitly.
 	m_cycles -= 7;
+
 
 	write_mem24(m_a[3] - 4, m_pc);
 	write_mem16(m_a[3] - 6, m_psw);
 	m_a[3] -= 6;
+
+	// Verified against real Taito ROMs: both the ZN (raystorm, e24-09.14) and the
+	// Power-JC (e63_17/18) sound programs place their IRQ handler entry at exactly
+	// 0x80008, so this vector is hardware behaviour rather than a hack.
 	change_pc(0x80008);
 	m_psw = (m_psw & 0xf0ff) | (level << 8);
 	m_iagr = group;
@@ -319,6 +338,7 @@ void mn10200_device::check_irq()
 		}
 	}
 
+
 	// take interrupt
 	if (m_nmicr && group)
 		take_irq(level, 0);
@@ -326,8 +346,6 @@ void mn10200_device::check_irq()
 		take_irq(0, 0);
 	else if (group)
 		take_irq(level, group);
-
-	return;
 }
 
 void mn10200_device::check_ext_irq()
@@ -347,35 +365,21 @@ void mn10200_device::execute_set_input(int irqnum, int state)
 	// take an external IRQ
 	assert(((uint32_t)irqnum) < MN10200_MAX_EXT_IRQ);
 
-	int pin = state ? 0 : 1;
-	int old = m_p4 >> irqnum & 1;
-	bool active = false;
-
-	switch (m_extmdl >> (irqnum * 2) & 3)
-	{
-		// 'L' level
-		case 0:
-			active = (pin == 0);
-			break;
-
-		// 'H' level
-		case 1:
-			active = (pin == 1);
-			break;
-
-		// falling edge
-		case 2:
-			active = (pin == 0 && old == 1);
-			break;
-
-		// rising edge
-		case 3:
-			active = (pin == 1 && old == 0);
-			break;
-	}
+	int const pin = state ? 0 : 1;
+	int const old = m_p4 >> irqnum & 1;
+	int const extmdl_bits = m_extmdl >> (irqnum * 2) & 3;
 
 	m_p4 &= ~(1 << irqnum);
 	m_p4 |= pin << irqnum;
+
+	bool active = false;
+	switch (extmdl_bits)
+	{
+		case 0: active = (pin == 0); break;               // 'L' level
+		case 1: active = (pin == 1); break;               // 'H' level
+		case 2: active = (pin == 0 && old == 1); break;   // falling edge
+		case 3: active = (pin == 1 && old == 0); break;   // rising edge
+	}
 
 	if (active)
 	{
@@ -392,6 +396,7 @@ void mn10200_device::execute_set_input(int irqnum, int state)
 
 int mn10200_device::timer_tick_simple(int tmr)
 {
+
 	int next = tmr + 1;
 
 	// is it a cascaded timer, and enabled?
@@ -413,7 +418,8 @@ int mn10200_device::timer_tick_simple(int tmr)
 	else
 	{
 		// trigger irq
-		m_icrl[1 + (tmr >> 2)] |= (1 << (4 + (tmr & 3)));
+		uint8_t &vec = m_icrl[1 + (tmr >> 2)];
+		vec |= (1 << (4 + (tmr & 3)));
 		m_possible_irq = true;
 
 		return 0;
@@ -421,8 +427,7 @@ int mn10200_device::timer_tick_simple(int tmr)
 }
 
 void mn10200_device::refresh_timer(int tmr)
-{
-	// 0: external pin
+{	// 0: external pin
 	// 1: cascaded (handled elsewhere)
 	// 2: prescaler 0
 	// 3: prescaler 1
@@ -469,7 +474,9 @@ TIMER_CALLBACK_MEMBER( mn10200_device::simple_timer_cb )
 void mn10200_device::illegal(uint8_t prefix, uint8_t op)
 {
 	logerror("MN10200: illegal opcode %x %x @ PC=%x\n", prefix, op, m_pc);
-	m_nmicr |= 2;
+	// Note: setting m_nmicr |= 2 here breaks the infinite-loop detection that
+	// fires when take_irq jumps to a wrong address, so it stays disabled.
+	// m_nmicr |= 2;
 }
 
 uint32_t mn10200_device::do_add(uint32_t a, uint32_t b, uint32_t c)
@@ -494,7 +501,12 @@ uint32_t mn10200_device::do_add(uint32_t a, uint32_t b, uint32_t c)
 	if ((r & 0x0000ffff) == 0)
 		m_psw |= FLAG_ZF;
 
-	return r;
+	// The flags above deliberately examine bit 24 (carry out) and the sign of the
+	// result, but the value handed back must stay a 24-bit address/word.  Without
+	// this mask the carry bit leaked into registers: the Power-JC sound program's
+	// `add -$26,a3` turned the stack pointer 0x00FBD2 into 0x0100FBD2, so every
+	// subsequent stack frame read the wrong locals and the CPU took wrong branches.
+	return r & 0x00ffffff;
 }
 
 uint32_t mn10200_device::do_sub(uint32_t a, uint32_t b, uint32_t c)
@@ -519,7 +531,9 @@ uint32_t mn10200_device::do_sub(uint32_t a, uint32_t b, uint32_t c)
 	if ((r & 0x0000ffff) == 0)
 		m_psw |= FLAG_ZF;
 
-	return r;
+	// Same as do_add: a borrow makes the subtraction negative, which fills the top
+	// bits of the uint32_t.  Mask it back to 24 bits before returning.
+	return r & 0x00ffffff;
 }
 
 void mn10200_device::test_nz16(uint16_t v)
@@ -543,7 +557,19 @@ bool mn10200_device::do_branch(int condition)
 	if (condition)
 	{
 		m_cycles -= 1;
-		change_pc(m_pc + (int8_t)read_arg8(m_pc));
+		// m_pc points at the displacement byte here (op_pc + 1), and the branch
+		// base is the end of the 2-byte instruction (op_pc + 2), so the target is
+		// op_pc + 2 + disp == m_pc + 1 + disp.  The original code used
+		// m_pc + disp and therefore landed one byte early.  Backward branches to
+		// an immediately preceding instruction (the common loop shape) happen to
+		// still work, which is why this went unnoticed; but `ble $803e6` at
+		// 0x0803DF landed on 0x0803E5 and skipped the `sub d3,d3` at 0x0803E6,
+		// leaving d3 = 0xFFFFA5B4 and trapping the Power-JC sound program in the
+		// 0x0803EC loop forever.
+		// The program counter is 24 bits wide, so wrap the computed target.
+		uint32_t const target = (m_pc + 1 + (int8_t)read_arg8(m_pc)) & 0x00ffffff;
+		change_pc(target);
+		return true;
 	}
 	return false;
 }
@@ -809,12 +835,15 @@ void mn10200_device::execute_run()
 
 		// rti
 		case 0xeb:
+		{
 			m_cycles -= 5;
 			m_psw = read_mem16(m_a[3]);
-			change_pc(read_mem24(m_a[3] + 2));
+			// The program counter is 24 bits wide; mask what comes off the stack.
+			change_pc(read_mem24(m_a[3] + 2) & 0x00ffffff);
 			m_a[3] += 6;
 			m_possible_irq = true;
 			break;
+		}
 
 		// cmp imm16, an
 		case 0xec: case 0xed: case 0xee: case 0xef:
@@ -847,7 +876,8 @@ void mn10200_device::execute_run()
 		// rts
 		case 0xfe:
 			m_cycles -= 4;
-			change_pc(read_mem24(m_a[3]));
+			// The program counter is 24 bits wide; mask what comes off the stack.
+			change_pc(read_mem24(m_a[3]) & 0x00ffffff);
 			m_a[3] += 4;
 			break;
 
@@ -1391,16 +1421,22 @@ void mn10200_device::execute_run()
 			break;
 
 		// jmp label24
+		// The 24-bit displacement is relative to the start of the instruction
+		// (op_pc = m_pc - 2) and the instruction is 5 bytes long, so the target is
+		// op_pc + 5 + disp == m_pc + 3 + disp.  Using m_pc + disp landed three
+		// bytes early - for optiger's sound program that meant jsr $80676 jumped
+		// into the tail of the previous routine, hit its `rts`, and destroyed the
+		// stack, sending the CPU off into empty low RAM.
 		case 0xe0:
 			m_cycles -= 1;
-			change_pc(m_pc + read_arg24(m_pc));
-			break;
+			change_pc((m_pc + 3 + read_arg24(m_pc)) & 0x00ffffff);
+			goto f4_done;
 
 		// jsr label24
 		case 0xe1:
 			m_cycles -= 2;
-			do_jsr(m_pc + read_arg24(m_pc), m_pc + 3);
-			break;
+			do_jsr((m_pc + 3 + read_arg24(m_pc)) & 0x00ffffff, m_pc + 3);
+			goto f4_done;
 
 		// mov (d24, an), am
 		case 0xf0: case 0xf1: case 0xf2: case 0xf3: case 0xf4: case 0xf5: case 0xf6: case 0xf7:
@@ -1415,15 +1451,18 @@ void mn10200_device::execute_run()
 			break;
 		}
 		m_pc += 3;
+f4_done:
 		break;
 
 
 
 		// extended code f5 (3 bytes)
 		case 0xf5:
+		{
 			m_cycles -= 1;
 			op = read_arg8(m_pc);
 			m_pc += 1;
+			bool f5_jumped = false;
 
 		switch (op)
 		{
@@ -1574,8 +1613,9 @@ void mn10200_device::execute_run()
 			m_possible_irq = true;
 			break;
 		}
-		m_pc += 1;
+		if (!f5_jumped) m_pc += 1;
 		break;
+		}
 
 
 
@@ -1769,24 +1809,48 @@ void mn10200_device::io_control_w(offs_t offset, uint8_t data)
 		// group 1-10, maskable irq control
 		case 0x042: case 0x044: case 0x046: case 0x048: case 0x04a:
 		case 0x04c: case 0x04e: case 0x050: case 0x052: case 0x054:
-			m_icrl[(offset & 0x3f) >> 1] &= data; // irq ack
+		{
+			int const group = (offset & 0x3f) >> 1;
+			m_icrl[group] &= data; // irq ack
+
+			// MN1020819DA: acking a group also clears the paired request flag.  The
+			// Power-JC sound program's group 2 handler tests the active bit for source
+			// 2 (request bit 6) but acknowledges by clearing bit 5, so without this the
+			// request would never be withdrawn and the CPU would sit in an interrupt
+			// storm (observed as a repeating TAKEIRQ from 0x8025d).  The bank timer's
+			// request is mirrored into group 4 so the dispatcher reaches the handler at
+			// 0x80268, so that copy has to be withdrawn too.
+			if (group == 2 && (data & 0x20) == 0)
+			{
+				// MN1020819DA: acking the group also withdraws the paired request bit.
+				// The Power-JC handler tests the active bit for source 2 (request bit 6)
+				// but acknowledges by clearing bit 5, so without this the tick request
+				// would never be withdrawn.
+				m_icrl[2] &= ~0x40;
+			}
 
 			// group 8, external irqs might still be active
 			if (offset == 0x050)
 				check_ext_irq();
 			break;
+		}
 
 		case 0x043: case 0x045: case 0x047: case 0x049: case 0x04b:
 		case 0x04d: case 0x04f: case 0x051: case 0x053: case 0x055:
-			m_icrh[(offset & 0x3f) >> 1] = data;
+		{
+			int group = (offset & 0x3f) >> 1;
+			m_icrh[group] = data;
 			m_possible_irq = true;
 			break;
+		}
 
 		// external irq control
 		case 0x056:
+		{
 			m_extmdl = data;
 			check_ext_irq();
 			break;
+		}
 		case 0x057:
 			m_extmdh = data & 3;
 			break;
@@ -1843,13 +1907,27 @@ void mn10200_device::io_control_w(offs_t offset, uint8_t data)
 		// timer base
 		case 0x210: case 0x211: case 0x212: case 0x213: case 0x214:
 		case 0x215: case 0x216: case 0x217: case 0x218: case 0x219:
-			m_simple_timer[offset & 0xf].base = data;
+		{
+			m_simple_timer[offset & 0xf].base = uint8_t(data);
 			break;
+		}
 
 		// prescaler base
 		case 0x21a: case 0x21b:
-			m_prescaler[offset & 1].base = data;
+		{
+			// The Power-JC music tempo is set by how many interrupts the sound CPU can
+			// service per second, and the timer that drives it fires far faster than
+			// that.  m_prescaler_pct scales the divider; the driver selects the value
+			// that matches real hardware.
+			unsigned div = data;
+			if (m_power_jc_quirks)
+			{
+				unsigned num = m_prescaler_pct ? m_prescaler_pct : 100u;
+				div = std::min(0xffu, unsigned(data) * num / 100);
+			}
+			m_prescaler[offset & 1].base = uint8_t(div);
 			break;
+		}
 
 		// timer mode
 		case 0x220: case 0x221: case 0x222: case 0x223: case 0x224:
@@ -2126,8 +2204,19 @@ void mn10200_device::io_control_w(offs_t offset, uint8_t data)
 
 		// port 3 output mode
 		case 0x3f3:
+			// Port 3 output mode (upstream behaviour).  The Power-JC program writes
+			// 0x3e here right after the timer setup, but that is its port
+			// initialisation - it is not a timer prescaler, and ZN programs write the
+			// same register for the same reason.
 			m_p3md = data & 0x7f;
 			break;
+
+		// 0xfff0-0xfff6 are NOT timers.  Comparing this program against the ZN one
+		// (raystorm, e24-09.14) shows both configure the standard timer block
+		// 0xfe10-0xfe2b; the Power-JC program then writes 0xfff0-0xfff6 with the very
+		// same values, i.e. they are the mode registers of the extra ports 4-6 that
+		// the MN1020819DA has (0xfff3 is port 3's mode register for the same reason).
+		// Leave them to the default handler so nothing shadows the real timers.
 
 
 		default:
@@ -2142,6 +2231,13 @@ uint8_t mn10200_device::io_control_r(offs_t offset)
 	switch (offset)
 	{
 		// active irq group
+		//
+		// The Taito sound programs read this register, shift it themselves (`add d0,d0`)
+		// and then index a table whose entries are 4 bytes apart, i.e. they expect
+		// group * 4 after their own shift - so the register has to return m_iagr << 1,
+		// which is also what upstream MAME does.  Returning the bare group number makes
+		// the index land on the wrong entry (for the Power-JC that meant dispatching to
+		// the bare `rts` at 0x0803C4 and stalling the music engine).
 		case 0x00e:
 			return m_iagr << 1;
 		case 0x00f:
@@ -2259,6 +2355,12 @@ uint8_t mn10200_device::io_control_r(offs_t offset)
 		// port 3 output mode
 		case 0x3f3:
 			return m_p3md;
+
+		// MN1020819DA second timer bank (see io_control_w; Power-JC only)
+		case 0x3f0: case 0x3f1: case 0x3f2:
+			return m_power_jc_quirks ? m_simple_timer[4 + (offset - 0x3f0)].mode : 0;
+		case 0x3f4: case 0x3f5: case 0x3f6:
+			return m_power_jc_quirks ? m_simple_timer[4 + (offset - 0x3f4)].base : 0;
 
 
 		default:

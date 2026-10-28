@@ -43,11 +43,32 @@ public:
 	uint8_t io_control_r(offs_t offset);
 	void io_control_w(offs_t offset, uint8_t data);
 
+	// The Power-JC sound program's music tempo is driven by the tick counter, which
+	// only advances once per serviced interrupt, and the timer fires far faster than
+	// the CPU can service it.  The prescaler percentage is the fine knob: 100 = the
+	// program's own value, 540 = the setting that lands the Power-JC tick on the
+	// ~1000 Hz the ZN boards run at.
+	void set_prescaler_percent(unsigned pct) { m_prescaler_pct = pct ? pct : 100; }
+
+	// Board quirks seen on the Taito Power-JC's MN1020819DA (group 4 mirrored into
+	// group 2, paired request bits withdrawn on ack, and the extra 8-bit timer bank
+	// at 0x3f0-0x3f7).  Off by default so the part can be used as a plain 819 on
+	// other boards (e.g. Taito Type-Zero).
+	void set_power_jc_quirks(bool enable) { m_power_jc_quirks = enable; }
+
 	void mn1020012a_internal_map(address_map &map) ATTR_COLD;
 protected:
 	static constexpr unsigned MN10200_NUM_PRESCALERS = 2;
 	static constexpr unsigned MN10200_NUM_TIMERS_8BIT = 10;
 	static constexpr unsigned MN10200_NUM_IRQ_GROUPS = 31;
+
+	// True for the MN1020819DA (Taito Power-JC).  That part puts a second 8-bit
+	// timer bank at 0xfff0-0xfff6 and routes its tick through interrupt group 4,
+	// while the plain MN1020012A used by the ZN/G-NET boards uses the normal
+	// 0xfe10/0xfe20 timer block and a conventional group 2 interrupt.  All the
+	// Power-JC specific workarounds in this file are gated on this flag so the
+	// other Zoom games keep stock behaviour.
+	bool m_power_jc_quirks = false;
 
 
 	// construction/destruction
@@ -104,6 +125,7 @@ private:
 	uint8_t m_extmdl;
 	uint8_t m_extmdh;
 	bool m_possible_irq;
+	unsigned m_prescaler_pct = 100;
 
 	// timers
 	void refresh_timer(int tmr);
@@ -193,8 +215,18 @@ public:
 };
 
 
+// Taito Power-JC variant: same core, plus the second timer bank at 0xfff0-0xfff6
+// and the group 4 tick routing used by that board's sound program.
+class mn1020819_device : public mn10200_device
+{
+public:
+	mn1020819_device(const machine_config &mconfig, const char *tag, device_t *owner, uint32_t clock);
+};
+
+
 
 DECLARE_DEVICE_TYPE(MN1020012A, mn1020012a_device)
+DECLARE_DEVICE_TYPE(MN1020819, mn1020819_device)
 
 
 #endif // MAME_CPU_MN10200_MN10200_H
