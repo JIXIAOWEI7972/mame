@@ -837,18 +837,34 @@ void taitopjc_state::tlcs_common_w(offs_t offset, uint8_t data)
 
 uint8_t taitopjc_state::tlcs_sound_r(offs_t offset)
 {
-	if (offset == 0x15)
+	// M66220FP dual-port RAM as seen by the I/O CPU.  Every byte is real RAM now and
+	// the sound CPU maintains the handshake bytes itself:
+	//   0x15  read/consume pointer, written by the sound program at 0x085a87
+	//   0x16  sound-board version byte, written at 0x085874
+	//   0x17  ready flag, written as 0x55 at 0x08587b once the mailbox is cleared
+	//   0x2c  status byte
+	//   0x80..0xff  128-byte command ring, filled by the I/O CPU in 4-byte packets
+	//                (the write index itself lives in I/O CPU RAM at 0x010046)
+	// Reading the ring does NOT advance anything: the I/O CPU only ever reads it
+	// back during its own RAM test.
+	uint8_t const data = m_snd_shared_ram[offset & 0xff];
+
+	// Watchdog: the I/O CPU spins on "cp (0x040017),0x55" forever if the sound CPU
+	// never gets there.  Rather than hang the whole machine, give up after a while
+	// and say so - that keeps the rest of the game observable while the sound board
+	// is still being brought up.
+	if (offset == 0x17)
 	{
-		return m_tlcs_sound_ptr & 0x7f;
-	}
-	else if (offset == 0x17)
-	{
-		return 0x55;
-	}
-	else if (offset >= 0x80 && offset < 0x100)
-	{
-		if (!machine().side_effects_disabled())
-			m_tlcs_sound_ptr++;
+		if (data == 0x55)
+			m_snd_hs_spin = 0;
+		else if (m_snd_force_ready)
+			return 0x55;
+		else if (++m_snd_hs_spin > 8000000)
+		{
+			m_snd_force_ready = true;
+			logerror("taitopjc: sound board never asserted 0x55 at 0x040017, forcing handshake\n");
+			return 0x55;
+		}
 	}
 
 	return 0;
@@ -856,6 +872,25 @@ uint8_t taitopjc_state::tlcs_sound_r(offs_t offset)
 
 void taitopjc_state::tlcs_sound_w(offs_t offset, uint8_t data)
 {
+	// The other port of the same dual-port RAM.  A write into the 0x80-0xff half is
+	// what the M66220FP turns into an interrupt on the sound CPU side.
+	//
+	// 0x040017 = 0 starts the sound-board reset handshake (0xfc1810 / 0xfc1853): the
+	// I/O CPU clears the flag, strobes the board (SFR 0x18 bit 0), runs the mailbox
+	// RAM test over 0x040040-0x0400ff and then spins waiting for 0x55.  Hold the
+	// sound CPU in reset across that test so the two sides cannot corrupt each
+	// other's mailbox traffic, then release it - the sound program clears the whole
+	// mailbox and writes 0x55 back, which completes the handshake.
+	if (offset == 0x17 && data == 0x00 && !machine().side_effects_disabled())
+	{
+		m_snd_shared_ram[0x17] = 0x00;
+		m_snd_force_ready = false;
+		m_snd_hs_spin = 0;
+		m_soundcpu->set_input_line(INPUT_LINE_RESET, ASSERT_LINE);
+		m_snd_reset_timer->adjust(attotime::from_msec(2));
+		return;
+	}
+
 	LOGSOUND("tlcs_sound_w: %08X, %02X\n", offset, data);
 }
 
@@ -896,6 +931,15 @@ void taitopjc_state::tlcs900h_mem(address_map &map)
 
 void taitopjc_state::mn10200_map(address_map &map)
 {
+	// The sound program keeps its stack (SP = 0xFBFC) and all of its variables in
+	// the low 64K, so this RAM is mandatory: without it every stack access reads
+	// open bus and the CPU never gets past its boot code.
+	map(0x000000, 0x00fbff).ram();     // work RAM
+	// 0x00fc00-0x00ffff is the MN10200 internal I/O block, which the CPU core maps
+	// itself; internal maps are applied after the driver map and therefore win.  The
+	// two unmodelled port bytes used by the ZFX-2 bit-serial link are hooked from
+	// machine_start() with runtime handlers instead (see snd_ser_clk_w).
+
 	map(0x080000, 0x0fffff).rom().region("mn10200", 0);
 }
 
@@ -1009,6 +1053,45 @@ void taitopjc_state::machine_start()
 
 	m_maincpu->ppcdrc_add_fastram(0x00000000, 0x003fffff, false, m_main_ram);
 
+	m_maincpu->ppcdrc_add_fastram(0x00000000, 0x003fffff, false, m_main_ram);
+
+	// EXPERIMENT: map the sound program's timer registers (0xfff0-0xfff6, which this
+	// core does not model) onto the core's timer 4-6 block (mode 0x224+i, base
+	// 0x214+i) and force the prescaler on, so we can see whether the missing tick is
+	// what blocks the sound CPU.  Forwarded writes arrive here one byte at a time.
+	auto snd_timer_w = [this](offs_t base, uint8_t addr_low, uint8_t data)
+	{
+		if (addr_low >= 0xf0 && addr_low <= 0xf2)
+			m_soundcpu->io_control_w(0x224 + (addr_low - 0xf0), data);   // mode
+		else if (addr_low >= 0xf4 && addr_low <= 0xf6)
+			m_soundcpu->io_control_w(0x214 + (addr_low - 0xf4), data);   // base
+	};
+
+	m_soundcpu->space(AS_PROGRAM).install_write_tap(0x00fff0, 0x00fff1, "pjc_tmr0",
+		[this, snd_timer_w](offs_t offset, uint16_t &data, uint16_t mask)
+		{
+			if (mask & 0x00ff) snd_timer_w(0xfff0, 0xf0, uint8_t(data & 0xff));
+			if (mask & 0xff00) snd_timer_w(0xfff0, 0xf1, uint8_t(data >> 8));
+		});
+	m_soundcpu->space(AS_PROGRAM).install_write_tap(0x00fff2, 0x00fff3, "pjc_tmr1",
+		[this, snd_timer_w](offs_t offset, uint16_t &data, uint16_t mask)
+		{
+			if (mask & 0x00ff) snd_timer_w(0xfff2, 0xf2, uint8_t(data & 0xff));
+		});
+	m_soundcpu->space(AS_PROGRAM).install_write_tap(0x00fff4, 0x00fff5, "pjc_tmr2",
+		[this, snd_timer_w](offs_t offset, uint16_t &data, uint16_t mask)
+		{
+			if (mask & 0x00ff) snd_timer_w(0xfff4, 0xf4, uint8_t(data & 0xff));
+			if (mask & 0xff00) snd_timer_w(0xfff4, 0xf5, uint8_t(data >> 8));
+		});
+	m_soundcpu->space(AS_PROGRAM).install_write_tap(0x00fff6, 0x00fff7, "pjc_tmr3",
+		[this, snd_timer_w](offs_t offset, uint16_t &data, uint16_t mask)
+		{
+			if (mask & 0x00ff) snd_timer_w(0xfff6, 0xf6, uint8_t(data & 0xff));
+		});
+
+	m_snd_reset_timer = machine().scheduler().timer_alloc(timer_expired_delegate(FUNC(taitopjc_state::snd_reset_release), this));
+
 	save_item(NAME(m_dsp_rom_address));
 	save_item(NAME(m_tlcs_sound_ptr));
 }
@@ -1055,7 +1138,27 @@ void taitopjc_state::taitopjc(machine_config &config)
 	m_dsp->set_addrmap(AS_IO, &taitopjc_state::tms_io_map);
 
 	// MN1020819DA sound CPU
-	MN1020012A(config, m_soundcpu, 25_MHz_XTAL/2); // clock divisor unverified - NOTE: May have 64kB internal ROM
+	//
+	// The music tempo is driven by the tick counter, which only advances once per
+	// serviced interrupt.  The timer fires far faster than the CPU can service it, so
+	// the effective tick rate (and therefore the music speed) is set by the interrupt
+	// servicing throughput.  A prescaler scale of 2 halves the tick rate to ~2.6 kHz,
+	// which is the setting that matches the attract music of the reference recording.
+	// PJC_PSCALE overrides it at runtime for listening tests.
+	MN1020819(config, m_soundcpu, 25_MHz_XTAL/2); // clock divisor unverified - NOTE: May have 64kB internal ROM
+	// Calibrated against the ZN boards: their sound CPUs take ~1000 interrupts per
+	// second, and the Power-JC engine drives its music from the same kind of tick
+	// counter.  The unscaled divider runs the tick at ~2.6 kHz (music noticeably too
+	// fast), while 540% lands the tick on ~999 Hz - the same rate the ZN boards run
+	// at - and the attract music then lasts the same ~65 s as in the reference
+	// recording.  PJC_PCT overrides it for listening tests.
+	m_soundcpu->set_prescaler_percent(550);
+	// The Power-JC board wires group 4 through group 2 and uses the 819's extra
+	// 8-bit timer bank, so opt into the board quirks.  Other MN1020819DA boards
+	// (e.g. Taito Type-Zero) run the plain device.
+	m_soundcpu->set_power_jc_quirks(true);
+	// Board ID straps.
+	m_soundcpu->read_port<3>().set(FUNC(taitopjc_state::snd_port3_r));
 	m_soundcpu->set_addrmap(AS_PROGRAM, &taitopjc_state::mn10200_map);
 
 	config.set_maximum_quantum(attotime::from_hz(200000));
