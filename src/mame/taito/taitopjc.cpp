@@ -319,6 +319,8 @@ G)ame Connector, dual row 50 pins
 
 */
 
+#include <cmath>
+
 #include "emu.h"
 
 #include "tc0780fpa.h"
@@ -328,6 +330,7 @@ G)ame Connector, dual row 50 pins
 #include "cpu/tlcs900/tmp95c063.h"
 #include "cpu/tms320c5x/tms320c5x.h"
 #include "machine/nvram.h"
+#include "sound/zsg2.h"
 
 #include "emupal.h"
 #include "screen.h"
@@ -367,6 +370,7 @@ public:
 		, m_soundcpu(*this, "mn10200")
 		, m_dsp(*this, "dsp")
 		, m_tc0780fpa(*this, "tc0780fpa")
+		, m_zsg2(*this, "zsg2")
 		, m_palette(*this, "palette")
 		, m_polyrom(*this, "poly")
 		, m_gfxdecode(*this, "gfxdecode")
@@ -389,9 +393,10 @@ protected:
 private:
 	required_device<ppc603e_device> m_maincpu;
 	required_device<tmp95c063_device> m_iocpu;
-	required_device<cpu_device> m_soundcpu;
+	required_device<mn1020819_device> m_soundcpu;
 	required_device<cpu_device> m_dsp;
 	required_device<tc0780fpa_device> m_tc0780fpa;
+	required_device<zsg2_device> m_zsg2;
 	required_device<palette_device> m_palette;
 	required_memory_region m_polyrom;
 	required_device<gfxdecode_device> m_gfxdecode;
@@ -669,7 +674,16 @@ void taitopjc_state::ppc_common_w(offs_t offset, uint64_t data, uint64_t mem_mas
 		m_io_share_ram[address + 1] = (uint16_t)(data >> 16);
 	}
 
-	if (offset == 0x7ff && ACCESSING_BITS_48_63)
+	// Command hand-off to the I/O CPU.
+	//
+	// The command word lives in m_io_share_ram[0xfff], which this handler fills from
+	// ACCESSING_BITS_16_31 (address + 1 = 0xfff when offset == 0x7ff).  The guard used
+	// to require ACCESSING_BITS_48_63, which fills 0xffe instead, so it never matched
+	// the transfer that actually carries the command: a runtime probe shows the PPC
+	// sending 0x6010 with mem_mask 0x00000000ffff0000 (bits 16-31) over and over while
+	// the interrupt was never raised, so the I/O CPU never serviced a single command.
+	// Accept either halfword so the hand-off fires whenever this word is written.
+	if (offset == 0x7ff && (ACCESSING_BITS_48_63 || ACCESSING_BITS_16_31))
 	{
 		if (m_io_share_ram[0xfff] != 0x0000)
 		{
@@ -680,6 +694,7 @@ void taitopjc_state::ppc_common_w(offs_t offset, uint64_t data, uint64_t mem_mas
 		m_maincpu->set_input_line(INPUT_LINE_IRQ0, CLEAR_LINE);
 
 		m_maincpu->abort_timeslice();
+
 	}
 }
 
@@ -880,6 +895,7 @@ void taitopjc_state::tlcs_common_w(offs_t offset, uint8_t data)
 		if (m_io_share_ram[0xffe] != 0)
 			m_maincpu->set_input_line(INPUT_LINE_IRQ0, ASSERT_LINE);
 
+
 		m_iocpu->abort_timeslice();
 	}
 }
@@ -916,7 +932,7 @@ uint8_t taitopjc_state::tlcs_sound_r(offs_t offset)
 		}
 	}
 
-	return 0;
+	return data;
 }
 
 void taitopjc_state::tlcs_sound_w(offs_t offset, uint8_t data)
@@ -1278,7 +1294,10 @@ INPUT_PORTS_END
 
 void taitopjc_state::machine_start()
 {
-	m_maincpu->ppcdrc_set_options(PPCDRC_COMPATIBLE_OPTIONS);
+	// Keep the DRC's fast configuration; the game needs it to keep up (the compatible
+	// set enables strict verify, PC flushes and accurate single-precision rounding,
+	// which exist to validate the recompiler rather than to run the game).
+	m_maincpu->ppcdrc_set_options(PPCDRC_FASTEST_OPTIONS);
 
 	m_maincpu->ppcdrc_add_fastram(0x00000000, 0x003fffff, false, m_main_ram);
 
@@ -1329,10 +1348,16 @@ void taitopjc_state::machine_start()
 	save_item(NAME(m_vol_control));
 }
 
+
 void taitopjc_state::machine_reset()
 {
-	// halt sound CPU since we don't emulate this yet
-	m_soundcpu->set_input_line(INPUT_LINE_RESET, ASSERT_LINE);
+	// The sound CPU must be RELEASED, not held in reset.  The original driver
+	// asserted INPUT_LINE_RESET here with the comment "halt sound CPU since we don't
+	// emulate this yet", which is exactly why the ZSG-2 never received a single
+	// register write: mn10200_device::execute_run() is never entered while the reset
+	// line is asserted, so the sound program never ran at all.  Its I/O writes to
+	// 0xfcxx during reset are what produced the stray "MN ICRH" messages.
+	m_soundcpu->set_input_line(INPUT_LINE_RESET, CLEAR_LINE);
 
 	m_maincpu->set_input_line(INPUT_LINE_RESET, ASSERT_LINE);
 
@@ -1443,11 +1468,16 @@ void taitopjc_state::taitopjc(machine_config &config)
 
 void taitopjc_state::init_optiger()
 {
+#if 0
+	// The original driver patched the I/O CPU's mailbox self-test out here
+	// (0xfc0217 "jr C" -> two NOPs) because the 0x040040-0x0400ff window used to be
+	// a stub that read back as zero.  That window is real dual-port RAM now, so the
+	// walking-bit test at 0xfc1020/0xfc131c passes on its own and the patch is not
+	// needed - keep it only as a reference, in case a future failure needs bisecting.
 	uint8_t *rom = (uint8_t*)memregion("iocpu")->base();
-
-	// HACK: skip sound check
 	rom[BYTE_XOR_LE(0x217)] = 0x00;
 	rom[BYTE_XOR_LE(0x218)] = 0x00;
+#endif
 
 #if 0
 	uint32_t *mr = (uint32_t*)memregion("maindata")->base();
