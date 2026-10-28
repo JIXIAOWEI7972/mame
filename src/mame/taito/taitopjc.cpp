@@ -326,6 +326,9 @@ G)ame Connector, dual row 50 pins
 #include "tc0780fpa.h"
 
 #include "cpu/mn10200/mn10200.h"
+#include "cpu/tms57002/tms57002.h"
+
+#include "zfx2_zn_firmware.ipp"
 #include "cpu/powerpc/ppc.h"
 #include "cpu/tlcs900/tmp95c063.h"
 #include "cpu/tms320c5x/tms320c5x.h"
@@ -371,6 +374,7 @@ public:
 		, m_dsp(*this, "dsp")
 		, m_tc0780fpa(*this, "tc0780fpa")
 		, m_zsg2(*this, "zsg2")
+		, m_zfx2(*this, "zfx2")
 		, m_palette(*this, "palette")
 		, m_polyrom(*this, "poly")
 		, m_gfxdecode(*this, "gfxdecode")
@@ -397,6 +401,7 @@ private:
 	required_device<cpu_device> m_dsp;
 	required_device<tc0780fpa_device> m_tc0780fpa;
 	required_device<zsg2_device> m_zsg2;
+	required_device<tms57002_device> m_zfx2;
 	required_device<palette_device> m_palette;
 	required_memory_region m_polyrom;
 	required_device<gfxdecode_device> m_gfxdecode;
@@ -453,12 +458,19 @@ private:
 	// the sound board and then spins on "cp (0x040017),0x55"; the MN1020819 answers
 	// 0x55 once it has re-initialised the mailbox.  See tlcs_sound_w().
 	emu_timer *m_snd_reset_timer = nullptr;
+	// ZFX-2 parameter feed: the ZN firmware is configured by a sequence of
+	// cmem writes that have to be handed over one at a time.
+	emu_timer *m_zfx2_param_timer = nullptr;
+	unsigned m_zfx2_param_index = 0;
 	bool m_snd_force_ready = false;
 	uint32_t m_snd_hs_spin = 0;
 	// MB87078 volume latch as driven by the I/O CPU (0x04c001 = control, 0x04c000 = gain).
 	uint8_t m_vol_control = 0;
 
 	void mn10200_map(address_map &map) ATTR_COLD;
+	void zfx2_map(address_map &map) ATTR_COLD;
+	void load_zfx2();
+	TIMER_CALLBACK_MEMBER(zfx2_param_tick);
 	void ppc603e_mem(address_map &map) ATTR_COLD;
 	void tlcs900h_mem(address_map &map) ATTR_COLD;
 	void tms_data_map(address_map &map) ATTR_COLD;
@@ -1190,6 +1202,110 @@ void taitopjc_state::mn10200_map(address_map &map)
 
 
 
+void taitopjc_state::zfx2_map(address_map &map)
+{
+	// ZFX-2 external data memory: the effect program uses it for its delay lines.
+	map(0x00000, 0x3ffff).ram();
+}
+
+// ZFX-2 replacement firmware.
+//
+// The board never uploads a program to the ZFX-2 (only parameter blocks arrive
+// over the serial link), so the real chip runs firmware in internal ROM which is
+// not available.  What is loaded here instead is the firmware the ZN boards
+// upload to the same TMS57002-compatible part - the Zoom reverb/chorus program
+// (255 words) plus its 121 coefficient words - which gives the Power-JC the
+// effect mix the hardware would produce.  PJC_ZFXTEST=1 swaps in a hand-written
+// passthrough program used while bringing the DSP path up.
+TIMER_CALLBACK_MEMBER(taitopjc_state::zfx2_param_tick)
+{
+	if (m_zfx2_param_index >= std::size(zn_dsp_updates))
+		return;
+
+	// Wait for the DSP to consume the previous write before sending the next one:
+	// the host interface has a single address latch.
+	if (!m_zfx2->empty_r())
+	{
+		m_zfx2_param_timer->adjust(attotime::from_msec(1));
+		return;
+	}
+
+	auto const &u = zn_dsp_updates[m_zfx2_param_index++];
+	m_zfx2->cload_w(0);
+	m_zfx2->data_w(u.addr);
+	m_zfx2->data_w(uint8_t(u.value >> 24));
+	m_zfx2->data_w(uint8_t(u.value >> 16));
+	m_zfx2->data_w(uint8_t(u.value >> 8));
+	m_zfx2->data_w(uint8_t(u.value));
+	m_zfx2->cload_w(1);
+
+	if (m_zfx2_param_index < std::size(zn_dsp_updates))
+		m_zfx2_param_timer->adjust(attotime::from_msec(1));
+}
+
+void taitopjc_state::load_zfx2()
+{
+	// PJC_ZFXZN=1 loads the Zoom firmware captured from a ZN board instead of the
+	// hand-written test program below: ST0/ST1, then the 255-word program, then the
+	// 121 coefficient words.
+	if (!std::getenv("PJC_ZFXTEST"))
+	{
+		m_zfx2->cload_w(1);
+		m_zfx2->pload_w(0);
+		m_zfx2->data_w(0x00); m_zfx2->data_w(0x84); m_zfx2->data_w(0xAA);   // ST0
+		m_zfx2->data_w(0x00); m_zfx2->data_w(0x80); m_zfx2->data_w(0x20);   // ST1
+		for (uint32_t word : zn_dsp_program)
+		{
+			m_zfx2->data_w(uint8_t(word >> 16));
+			m_zfx2->data_w(uint8_t(word >> 8));
+			m_zfx2->data_w(uint8_t(word));
+		}
+		m_zfx2->pload_w(1);
+
+		m_zfx2->pload_w(0);
+		m_zfx2->cload_w(0);
+		for (uint32_t word : zn_dsp_coef)
+		{
+			m_zfx2->data_w(uint8_t(word >> 24));
+			m_zfx2->data_w(uint8_t(word >> 16));
+			m_zfx2->data_w(uint8_t(word >> 8));
+			m_zfx2->data_w(uint8_t(word));
+		}
+		m_zfx2->pload_w(1);
+
+		// Feed the runtime parameters the ZN sound program sends after the upload.
+		// They configure the delay lines and mix levels; without them the firmware
+		// keeps its boot defaults and there is no echo tail.
+		m_zfx2->cload_w(1);
+		m_zfx2_param_index = 0;
+		if (m_zfx2_param_timer)
+			m_zfx2_param_timer->adjust(attotime::from_msec(2));
+		return;
+	}
+
+	static const uint32_t program[] = {
+		0x0084AA,   // ST0
+		0x008020,   // ST1
+		0x009100,   // dis  si1_l,d(00)         ; dry left in
+		0xC40100,   // lmhd d(00)               ; macc = d(00) << 16
+		0x011000,   // domh so1_l               ; so[2] = macc >> 24
+		0x009901,   // dis  si1_r,d(01)
+		0xC40101,   // lmhd d(01)
+		0x011800,   // domh so1_r
+		0xFC4000,   // idle
+	};
+
+	m_zfx2->cload_w(1);
+	m_zfx2->pload_w(0);
+	for (uint32_t word : program)
+	{
+		m_zfx2->data_w(uint8_t(word >> 16));
+		m_zfx2->data_w(uint8_t(word >> 8));
+		m_zfx2->data_w(uint8_t(word));
+	}
+	m_zfx2->pload_w(1);
+}
+
 void taitopjc_state::tms_dspshare_w(offs_t offset, uint16_t data)
 {
 	if (offset == 0xffc)
@@ -1294,6 +1410,8 @@ INPUT_PORTS_END
 
 void taitopjc_state::machine_start()
 {
+	m_zfx2_param_timer = machine().scheduler().timer_alloc(timer_expired_delegate(FUNC(taitopjc_state::zfx2_param_tick), this));
+
 	// Keep the DRC's fast configuration; the game needs it to keep up (the compatible
 	// set enables strict verify, PC flushes and accurate single-precision rounding,
 	// which exist to validate the recompiler rather than to run the game).
@@ -1351,6 +1469,7 @@ void taitopjc_state::machine_start()
 
 void taitopjc_state::machine_reset()
 {
+	load_zfx2();
 	// The sound CPU must be RELEASED, not held in reset.  The original driver
 	// asserted INPUT_LINE_RESET here with the comment "halt sound CPU since we don't
 	// emulate this yet", which is exactly why the ZSG-2 never received a single
@@ -1431,6 +1550,32 @@ void taitopjc_state::taitopjc(machine_config &config)
 	// ZOOM ZSG-2 sample PCM, clocked from the 25MHz oscillator.
 	ZSG2(config, m_zsg2, 25_MHz_XTAL);
 
+	// ZFX-2 (TMS57002-class DASP).  Runs a replacement program built by load_zfx2();
+	// its external data memory holds the effect delay lines.
+	TMS57002(config, m_zfx2, 25_MHz_XTAL/2);
+	m_zfx2->set_addrmap(AS_DATA, &taitopjc_state::zfx2_map);
+	// Effect send levels.  The ZSG-2's per-voice send gains come from the game and
+	// are fairly low on this board, so the DSP's wet path is subtle; PJC_ZFXSEND
+	// scales the two sends for tuning.
+	float send_gain = 0.2f;
+	if (char const *e = std::getenv("PJC_ZFXSEND"))
+	{
+		float const v = float(std::atof(e));
+		if (v > 0.0f)
+			send_gain = v;
+	}
+	m_zsg2->add_route(0, m_zfx2, send_gain, 0); // reverb send
+	m_zsg2->add_route(1, m_zfx2, send_gain, 1); // chorus send
+	m_zsg2->add_route(2, m_zfx2, 1.0, 2);        // left direct
+	m_zsg2->add_route(3, m_zfx2, 1.0, 3);        // right direct
+	// PJC_ZFXD2S=1 also feeds the dry pair into the effect sends, which gives the
+	// reverb something to work with even when the game keeps its send gains low.
+	if (std::getenv("PJC_ZFXD2S"))
+	{
+		m_zsg2->add_route(2, m_zfx2, 0.5, 0);
+		m_zsg2->add_route(3, m_zfx2, 0.5, 1);
+	}
+
 
 	// The ZFX-2 runs firmware the game never uploads (only parameter blocks are sent
 	// over the serial link), so the real chip cannot be emulated from the available
@@ -1441,10 +1586,20 @@ void taitopjc_state::taitopjc(machine_config &config)
 	// the ZSG-2 out.  Do the same: mix all four ZSG-2 outputs - the two effect sends
 	// and the dry stereo pair - straight onto the speakers.
 	SPEAKER(config, "speaker", 2).front();
-	m_zsg2->add_route(0, "speaker", 0.5, 0); // reverb send
-	m_zsg2->add_route(1, "speaker", 0.5, 1); // chorus send
-	m_zsg2->add_route(2, "speaker", 1.0, 0); // left direct
-	m_zsg2->add_route(3, "speaker", 1.0, 1); // right direct
+	if (std::getenv("PJC_NODSP"))
+	{
+		// diagnostic: bypass the DSP and mix the ZSG-2 outputs directly
+		m_zsg2->add_route(0, "speaker", 0.5, 0);
+		m_zsg2->add_route(1, "speaker", 0.5, 1);
+		m_zsg2->add_route(2, "speaker", 1.0, 0);
+		m_zsg2->add_route(3, "speaker", 1.0, 1);
+	}
+	else
+	{
+		// normal path: the DSP program performs the effect mix
+		m_zfx2->add_route(2, "speaker", 1.0, 0);
+		m_zfx2->add_route(3, "speaker", 1.0, 1);
+	}
 
 	config.set_maximum_quantum(attotime::from_hz(200000));
 
