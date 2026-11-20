@@ -1168,7 +1168,7 @@ void m036_state::m036_tt(machine_config &config)
 	PALETTE(config, "palette").set_entries(0x200);
 
 	SPEAKER(config, "speaker").front_center();
-	TT5665(config, "tt5665", 4.952_MHz_XTAL, tt5665_device::ss_state::SS_HIGH, 0).add_route(1, "speaker", 1.0);
+	TT5665(config, "tt5665", 4'357'760, tt5665_device::ss_state::SS_HIGH, 0).add_route(1, "speaker", 1.0);
 }
 
 
@@ -1220,7 +1220,7 @@ void m036_oki_state::m036_oki_2mhz(machine_config &config)
 void m036_tt_state::tt_config(machine_config &config)
 {
 	hopper_config(config);
-	TT5665(config, m_tt5665, 4.952_MHz_XTAL, tt5665_device::ss_state::SS_HIGH, 0);
+	TT5665(config, m_tt5665, 4'357'760, tt5665_device::ss_state::SS_HIGH, 0);
 	m_tt5665->add_route(ALL_OUTPUTS, "speaker", 0.5);
 }
 
@@ -1271,7 +1271,7 @@ void m036_hd_base_state::hd_config(machine_config &config)
 	m_screen->set_size(800, 600);
 	m_screen->set_visarea(0, 799, 0, 599);
 	m_screen->set_screen_update(FUNC(m036_hd_base_state::screen_update<true>));
-	TT5665(config, m_tt5665, 4.952_MHz_XTAL, tt5665_device::ss_state::SS_HIGH, 0);
+	TT5665(config, m_tt5665, 4'357'760, tt5665_device::ss_state::SS_HIGH, 0);
 	m_tt5665->add_route(ALL_OUTPUTS, "speaker", 0.5);
 }
 
